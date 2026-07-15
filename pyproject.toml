@@ -1,0 +1,30 @@
+[project]
+name = "atrium_agents"
+version = "0.1.0"
+description = "Evolvable Atrium agents — the self-updating agent set, kept separate from the fixed Atrium control plane and evolution machinery so the self-evolution loop can rewrite them without touching trusted host code."
+readme = "README.md"
+authors = [
+    { name = "Masaya Kataoka", email = "ms.kataoka@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "atrium",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pyyaml>=6.0",
+]
+
+[tool.uv.sources]
+# Local dev: resolve `atrium` from the sibling checkout (editable) so changes to
+# the control plane are picked up without a publish/round-trip. For CI and
+# production, pin the git source instead — the evolution loop clones THIS repo,
+# and `atrium` comes in as an immutable dependency:
+#   atrium = { git = "https://github.com/hakuturu583/atrium.git", branch = "main" }
+atrium = { path = "../atrium", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
