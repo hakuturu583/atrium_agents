@@ -18,12 +18,14 @@ dev = [
 ]
 
 [tool.uv.sources]
-# Local dev: resolve `atrium` from the sibling checkout (editable) so changes to
-# the control plane are picked up without a publish/round-trip. For CI and
-# production, pin the git source instead — the evolution loop clones THIS repo,
-# and `atrium` comes in as an immutable dependency:
-#   atrium = { git = "https://github.com/hakuturu583/atrium.git", branch = "main" }
-atrium = { path = "../atrium", editable = true }
+# `atrium` is an immutable dependency pinned to its git source: the evolution
+# loop clones THIS repo and the control plane comes in from git, never as
+# editable source a coding agent could rewrite.
+#
+# For local control-plane development, temporarily override with the sibling
+# checkout instead:
+#   atrium = { path = "../atrium", editable = true }
+atrium = { git = "https://github.com/hakuturu583/atrium.git", branch = "main" }
 
 [build-system]
 requires = ["uv_build>=0.9.9,<0.10.0"]
