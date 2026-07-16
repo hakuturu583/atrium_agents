@@ -159,15 +159,20 @@ class InterfaceAgent(BaseAgent, abc.ABC):
         return f"{self.SOURCE}:{turn.channel}:{turn.thread}"
 
     def forward_payload(self, turn: Turn) -> dict[str, Any]:
-        """Ride-along reply coords (for the completion path) plus any steering."""
-        payload: dict[str, Any] = {self.SOURCE: self.reply_coords(turn)}
+        """Ride-along reply coords (for the completion path) plus any steering.
+
+        Coords go under the fixed, source-agnostic ``reply_coords`` key so the
+        control plane can echo them into a ``job_update`` without knowing the app;
+        ``source`` is tagged inside so the delivering interface knows they're its.
+        """
+        payload: dict[str, Any] = {"reply_coords": self.reply_coords(turn)}
         steering = self.steering(turn)
         if steering:
             payload["steering"] = steering
         return payload
 
     def reply_coords(self, turn: Turn) -> dict[str, Any]:
-        return {"channel": turn.channel, "thread": turn.thread, "user": turn.user}
+        return {"source": self.SOURCE, "channel": turn.channel, "thread": turn.thread, "user": turn.user}
 
     # ------------------------------------------------------------------ #
     # Overridable hooks (sensible defaults)                              #

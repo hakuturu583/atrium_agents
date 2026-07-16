@@ -110,7 +110,9 @@ def test_forwards_turn_to_control_plane_and_acks():
     assert req.instruction == "write hello world"
     assert req.agent == ""  # no explicit target ⇒ control plane routes (D5)
     assert req.context_id == "slack:C1:1699.0001"
-    assert req.payload["slack"] == {"channel": "C1", "thread": "1699.0001", "user": "U9"}
+    assert req.payload["reply_coords"] == {
+        "source": "slack", "channel": "C1", "thread": "1699.0001", "user": "U9"
+    }
     assert req.feedback_for is None
 
     # Ack is Slack-flavored and mentions the job id; session cached it.
