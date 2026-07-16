@@ -19,11 +19,22 @@ from __future__ import annotations
 from atrium.core.factory import register_agent_type
 
 from atrium_agents.inference_agent import InferenceAgent, InferenceSettings
+from atrium_agents.prompt_builder_agent import PromptBuilderAgent
 from atrium_agents.prompt_memory import (
     PromptLayer,
     PromptMemory,
     default_prompt_memory,
     tools_layer,
+)
+from atrium_agents.prompt_profiles import (
+    builtin_profiles,
+    coder_profile,
+    reviewer_profile,
+)
+from atrium_agents.prompt_source import (
+    LocalPromptSource,
+    PromptSource,
+    RemotePromptSource,
 )
 from atrium_agents.tabby_llm_agent import TabbyAgentConfig, TabbyLLMAgent
 
@@ -34,6 +45,13 @@ __all__ = [
     "PromptMemory",
     "default_prompt_memory",
     "tools_layer",
+    "coder_profile",
+    "reviewer_profile",
+    "builtin_profiles",
+    "PromptBuilderAgent",
+    "PromptSource",
+    "RemotePromptSource",
+    "LocalPromptSource",
     "TabbyAgentConfig",
     "TabbyLLMAgent",
 ]
@@ -41,3 +59,4 @@ __all__ = [
 # Register the evolvable concrete agents so they can be launched from a bare slug
 # (create_agent_by_slug) once the registry has an active generation for them.
 register_agent_type(TabbyLLMAgent)
+register_agent_type(PromptBuilderAgent)

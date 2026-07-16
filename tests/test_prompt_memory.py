@@ -1,7 +1,7 @@
 """Unit tests for the layered prompt-construction feature.
 
 These are pure / GPU-free: they exercise ``PromptLayer`` / ``PromptMemory``
-composition and the ``InferenceAgent.build_system_prompt`` seam without starting
+composition (the engine behind the prompt profiles) without starting
 a sandbox or contacting a model.
 """
 

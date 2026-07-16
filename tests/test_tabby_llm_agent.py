@@ -16,6 +16,8 @@ import json
 
 import pytest
 
+from atrium_agents.prompt_builder_agent import PromptBuilderAgent
+from atrium_agents.prompt_source import LocalPromptSource
 from atrium_agents.tabby_llm_agent import (
     KVCacheConfig,
     TabbyLLMAgent,
@@ -30,10 +32,15 @@ from atrium.core.errors import ModelNotReadyError, PolicyViolationError
 from atrium.protocol import data_message, get_message_data, text_message
 
 
-def _agent():
-    agent = TabbyLLMAgent("coder-1", "0.1.0")
+def _agent(prompt_source=None):
+    agent = TabbyLLMAgent("coder-1", "0.1.0", prompt_source=prompt_source)
     agent.config.retry_backoff_s = 0  # no real sleeping between retries
     return agent
+
+
+def _coder_source():
+    """A local coder role prompt for tests that assert a system prompt is sent."""
+    return LocalPromptSource(PromptBuilderAgent("pb-1"), "coder")
 
 
 def _script(agent, replies):
@@ -74,20 +81,29 @@ def _last_request(sent):
 # infer                                                                        #
 # --------------------------------------------------------------------------- #
 def test_infer_returns_text():
+    # No prompt_source -> role-agnostic backend -> just the user turn.
     agent = _agent()
     sent = _script(agent, [_ok("hello world")])
     out = asyncio.run(agent.infer("hi"))
     assert out == "hello world"
     req = _last_request(sent)
     assert req["type"] == "infer"
-    # system prompt (coding-agent memory) + user prompt were composed.
-    roles = [m["role"] for m in req["messages"]]
-    assert roles == ["system", "user"]
+    assert [m["role"] for m in req["messages"]] == ["user"]
     assert req["messages"][-1]["content"] == "hi"
 
 
-def test_infer_explicit_system_overrides_memory():
-    agent = _agent()
+def test_infer_prepends_role_prompt_from_source():
+    agent = _agent(_coder_source())
+    sent = _script(agent, [_ok("hello world")])
+    asyncio.run(agent.infer("hi"))
+    req = _last_request(sent)
+    # injected coder role prompt + user prompt were composed.
+    assert [m["role"] for m in req["messages"]] == ["system", "user"]
+    assert "coding agent" in req["messages"][0]["content"]
+
+
+def test_infer_explicit_system_overrides_source():
+    agent = _agent(_coder_source())
     sent = _script(agent, [_ok("ok")])
     asyncio.run(agent.infer("hi", system="be terse"))
     req = _last_request(sent)
@@ -135,11 +151,19 @@ def test_infer_passes_generation_params():
 # chat                                                                         #
 # --------------------------------------------------------------------------- #
 def test_chat_prepends_system_when_absent():
-    agent = _agent()
+    agent = _agent(_coder_source())
     sent = _script(agent, [_ok("reply")])
     asyncio.run(agent.chat([{"role": "user", "content": "hi"}]))
     req = _last_request(sent)
     assert req["messages"][0]["role"] == "system"
+
+
+def test_chat_without_source_sends_no_system():
+    agent = _agent()  # role-agnostic backend
+    sent = _script(agent, [_ok("reply")])
+    asyncio.run(agent.chat([{"role": "user", "content": "hi"}]))
+    req = _last_request(sent)
+    assert all(m["role"] != "system" for m in req["messages"])
 
 
 def test_chat_keeps_existing_system():
