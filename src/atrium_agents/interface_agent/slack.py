@@ -137,6 +137,13 @@ class SlackInterfaceAgent(InterfaceAgent):
             return ":white_check_mark: Done" + (f" (`{digest}`)" if digest else "") + "."
         return f":x: Job failed: {result.get('reason', 'unknown error')}"
 
+    def render_review(self, update: Mapping[str, Any]) -> str:
+        instruction = (update.get("result") or {}).get("instruction", "")
+        return (
+            f":eyes: Ready for your review: *{instruction}*\n"
+            "Reply *approve* to ship it, or say what to change."
+        )
+
     async def deliver(self, coords: Mapping[str, Any], text: str) -> None:
         """Post into the Slack thread via the injected transport (no-op if unwired)."""
         if self._poster is None:

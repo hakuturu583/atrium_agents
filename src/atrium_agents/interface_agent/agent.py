@@ -149,6 +149,14 @@ class InterfaceAgent(BaseAgent, abc.ABC):
         update = parse_job_update(message)
         if not update:
             return
+        if update.get("status") == "review":
+            # 動線2(b): the control plane parked a review ticket; present it and mark
+            # the session so the human's next reply relays as feedback_for the token.
+            token = str((update.get("result") or {}).get("token") or "")
+            if token:
+                self.sessions.get_or_create(token).pending_review = token
+            await self.deliver(update.get("coords") or {}, self.render_review(update))
+            return
         await self.deliver(update.get("coords") or {}, self.render_update(update))
 
     # ------------------------------------------------------------------ #
@@ -207,6 +215,10 @@ class InterfaceAgent(BaseAgent, abc.ABC):
     def render_update(self, update: Mapping[str, Any]) -> str:
         """Render a terminal/progress ``job_update`` for the thread."""
         raise NotImplementedError
+
+    def render_review(self, update: Mapping[str, Any]) -> str:
+        """Render a ``review`` presentation (defaults to :meth:`render_update`)."""
+        return self.render_update(update)
 
     @abc.abstractmethod
     async def deliver(self, coords: Mapping[str, Any], text: str) -> None:

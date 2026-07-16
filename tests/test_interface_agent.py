@@ -195,3 +195,24 @@ def test_deliver_without_poster_is_noop():
     update = build_job_update("j1", status="ok", coords={"channel": "C1"}, result={})
     # Must not raise when no transport is wired.
     asyncio.run(agent.on_job_update(update))
+
+
+# --------------------------------------------------------------------------- #
+# 動線2(b) — a review presentation marks the session for feedback relay         #
+# --------------------------------------------------------------------------- #
+def test_review_update_marks_pending_review_and_presents():
+    posted: list = []
+
+    async def poster(coords, text):
+        posted.append(text)
+
+    agent = _agent(poster=poster)
+    update = build_job_update(
+        "j1", status="review", coords={"channel": "C1", "thread": "9"},
+        result={"token": "slack:C1:9", "instruction": "build a widget"},
+    )
+    asyncio.run(agent.on_job_update(update))
+
+    # Session is marked so the human's next reply relays as feedback_for the token.
+    assert agent.sessions.get("slack:C1:9").pending_review == "slack:C1:9"
+    assert ":eyes:" in posted[0] and "build a widget" in posted[0]
