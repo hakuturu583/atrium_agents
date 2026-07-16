@@ -19,6 +19,11 @@ from __future__ import annotations
 from atrium.core.factory import register_agent_type
 
 from atrium_agents.inference_agent import InferenceAgent, InferenceSettings, Role
+from atrium_agents.interface_agent import (
+    InterfaceAgent,
+    SlackInterfaceAgent,
+    Turn,
+)
 from atrium_agents.prompt_memory import (
     PromptLayer,
     PromptMemory,
@@ -43,6 +48,9 @@ __all__ = [
     "InferenceAgent",
     "InferenceSettings",
     "Role",
+    "InterfaceAgent",
+    "SlackInterfaceAgent",
+    "Turn",
     "ReviewerRole",
     "coder_role",
     "reviewer_role",
@@ -64,3 +72,4 @@ __all__ = [
 # A coder / reviewer is a TabbyLLMAgent + a role (not a distinct agent type), so
 # there is no separate reviewer slug to register.
 register_agent_type(TabbyLLMAgent)
+register_agent_type(SlackInterfaceAgent)
