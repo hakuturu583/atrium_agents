@@ -23,8 +23,7 @@ from dataclasses import dataclass
 from dataclasses import fields as dc_fields
 from typing import Any, Optional
 
-from atrium_agents.inference_agent import InferenceAgent, InferenceSettings
-from atrium_agents.prompt_source import PromptSource
+from atrium_agents.inference_agent import InferenceAgent, InferenceSettings, Role as AgentRole
 from atrium_agents.tabby_llm_agent.cache import KVCacheConfig
 from atrium.core.errors import ModelNotReadyError, PolicyViolationError
 from atrium.core.types import SandboxConfig, VersionTag
@@ -133,7 +132,7 @@ class TabbyLLMAgent(InferenceAgent):
         config: Optional[TabbyAgentConfig] = None,
         sandbox_config: Optional[SandboxConfig] = None,
         settings: Optional[InferenceSettings] = None,
-        prompt_source: Optional[PromptSource] = None,
+        role: Optional[AgentRole] = None,
     ) -> None:
         # Lazy imports keep version/sandbox wiring inside the package directory,
         # so the agent's version and its image tag share one source of truth.
@@ -145,17 +144,17 @@ class TabbyLLMAgent(InferenceAgent):
 
         self.config = config or TabbyAgentConfig()
         # Default to coding-agent-tuned generation settings for this machine/model.
-        # The *role* is not built in: pass a ``prompt_source`` (e.g. a coder or
-        # reviewer source backed by a PromptBuilderAgent) to give this backend a
-        # system prompt. A client (see ``connect``) shares another agent's backend
-        # and never starts a sandbox, so it legitimately needs no GPU of its own.
+        # The *role* is not built in: pass a ``role`` (e.g. ``coder_role()`` /
+        # ``reviewer_role()``) to give this backend its prompt profile and I/O
+        # framing. A client (see ``connect``) shares another agent's backend and
+        # never starts a sandbox, so it legitimately needs no GPU of its own.
         super().__init__(
             agent_id,
             version,
             sandbox_config,
             require_gpu=not self.config.bridge_url,
             settings=settings or coding_agent_settings(),
-            prompt_source=prompt_source,
+            role=role,
         )
         self._model_ready = False
 
@@ -167,15 +166,15 @@ class TabbyLLMAgent(InferenceAgent):
         version: "str | VersionTag | None" = None,
         *,
         sandbox_config: Optional[SandboxConfig] = None,
-        prompt_source: Optional[PromptSource] = None,
+        role: Optional[AgentRole] = None,
     ) -> "TabbyLLMAgent":
         """Construct an agent from a YAML file with ``tabby:`` and ``inference:``
         sections. Inference keys override the coding-agent defaults; any omitted
         key keeps its tuned default; either section may be absent.
 
-        The *role prompt* is not configured here — it is an injected
-        ``prompt_source`` (a role served by a ``PromptBuilderAgent``), so this
-        file carries only connection and generation knobs.
+        The *role* is not configured here — it is an injected ``role`` (its
+        prompt profile + I/O framing), so this file carries only connection and
+        generation knobs.
 
         Example::
 
@@ -195,7 +194,7 @@ class TabbyLLMAgent(InferenceAgent):
             config=config,
             sandbox_config=sandbox_config,
             settings=settings,
-            prompt_source=prompt_source,
+            role=role,
         )
 
     @classmethod
@@ -207,7 +206,7 @@ class TabbyLLMAgent(InferenceAgent):
         model_name: Optional[str] = None,
         version: "str | VersionTag | None" = None,
         settings: Optional[InferenceSettings] = None,
-        prompt_source: Optional[PromptSource] = None,
+        role: Optional[AgentRole] = None,
     ) -> "TabbyLLMAgent":
         """Build a *client-mode* agent that shares an already-loaded backend.
 
@@ -222,11 +221,12 @@ class TabbyLLMAgent(InferenceAgent):
         requests target the right one; otherwise the backend's loaded model is
         used.
 
-        Inject ``prompt_source`` to give this client its role. Fanning two
-        clients into one backend — one with a
-        :class:`~atrium_agents.prompt_source.RemotePromptSource` for ``"coder"``,
-        one for ``"reviewer"`` — gives a coder and a reviewer that share the
-        model but keep unshared contexts and draw prompts from a common builder.
+        Inject a ``role`` (e.g. :func:`~atrium_agents.role.coder_role` /
+        :func:`~atrium_agents.role.reviewer_role`) to give this client its job.
+        Fanning two clients into one backend — one ``coder`` role, one
+        ``reviewer`` role — gives a coder and a reviewer that share the model
+        (their concurrent requests continuous-batch) but keep unshared contexts
+        and draw prompts from a common builder.
         """
         config = TabbyAgentConfig(bridge_url=bridge_url, model_name=model_name)
         return cls(
@@ -234,7 +234,7 @@ class TabbyLLMAgent(InferenceAgent):
             version,
             config=config,
             settings=settings,
-            prompt_source=prompt_source,
+            role=role,
         )
 
     @property
@@ -393,9 +393,8 @@ class TabbyLLMAgent(InferenceAgent):
         a JSON string of the ``tool_calls`` so the caller can execute them and
         continue via :meth:`chat`. Retries on ``not_ready`` (model quantizing).
 
-        When ``system`` is omitted, the role prompt from the agent's injected
-        ``prompt_source`` is sent as the system message (none when there is no
-        source).
+        When ``system`` is omitted, the agent's ``role`` composes its profile
+        into the system message (none when the role has no profile).
         """
         system = await self.resolve_system_prompt(system, tools=tools)
         request: dict[str, Any] = {
@@ -436,9 +435,9 @@ class TabbyLLMAgent(InferenceAgent):
         Oversized histories are compacted (older turns summarized) before the
         request is sent, per the agent's :class:`InferenceSettings`.
 
-        When the history carries no ``system`` turn, the role prompt from the
-        agent's injected ``prompt_source`` is prepended as one (none when there
-        is no source); an existing system turn is always left untouched.
+        When the history carries no ``system`` turn, the agent's ``role`` composes
+        its profile and prepends it as one (none when the role has no profile); an
+        existing system turn is always left untouched.
         """
         if not any(m.get("role") == "system" for m in messages):
             system = await self.resolve_system_prompt(None, tools=tools)

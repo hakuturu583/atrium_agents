@@ -11,10 +11,9 @@ Design lineage: ordered named sections that skip when empty (Hermes
 ``PromptManager``); a system prompt assembled from ordered section generators
 (Roo Code); labelled blocks recompiled into the prompt each turn (Letta/MemGPT).
 
-This is the assembly engine behind
-:mod:`atrium_agents.prompt_profiles` and the
-:class:`~atrium_agents.prompt_builder_agent.PromptBuilderAgent` that serves the
-composed prompts over A2A.
+This is the assembly engine behind :mod:`atrium_agents.prompt_profiles`; a
+:class:`~atrium_agents.inference_agent.Role` carries a profile and composes it
+into the agent's system prompt.
 """
 
 from __future__ import annotations

@@ -16,8 +16,7 @@ import json
 
 import pytest
 
-from atrium_agents.prompt_builder_agent import PromptBuilderAgent
-from atrium_agents.prompt_source import LocalPromptSource
+from atrium_agents.role import coder_role
 from atrium_agents.tabby_llm_agent import (
     KVCacheConfig,
     TabbyLLMAgent,
@@ -32,15 +31,15 @@ from atrium.core.errors import ModelNotReadyError, PolicyViolationError
 from atrium.protocol import data_message, get_message_data, text_message
 
 
-def _agent(prompt_source=None):
-    agent = TabbyLLMAgent("coder-1", "0.1.0", prompt_source=prompt_source)
+def _agent(role=None):
+    agent = TabbyLLMAgent("coder-1", "0.1.0", role=role)
     agent.config.retry_backoff_s = 0  # no real sleeping between retries
     return agent
 
 
-def _coder_source():
-    """A local coder role prompt for tests that assert a system prompt is sent."""
-    return LocalPromptSource(PromptBuilderAgent("pb-1"), "coder")
+def _coder_role():
+    """A coder role for tests that assert a system prompt is sent."""
+    return coder_role()
 
 
 def _script(agent, replies):
@@ -81,7 +80,7 @@ def _last_request(sent):
 # infer                                                                        #
 # --------------------------------------------------------------------------- #
 def test_infer_returns_text():
-    # No prompt_source -> role-agnostic backend -> just the user turn.
+    # No role -> role-agnostic backend -> just the user turn.
     agent = _agent()
     sent = _script(agent, [_ok("hello world")])
     out = asyncio.run(agent.infer("hi"))
@@ -93,7 +92,7 @@ def test_infer_returns_text():
 
 
 def test_infer_prepends_role_prompt_from_source():
-    agent = _agent(_coder_source())
+    agent = _agent(_coder_role())
     sent = _script(agent, [_ok("hello world")])
     asyncio.run(agent.infer("hi"))
     req = _last_request(sent)
@@ -103,7 +102,7 @@ def test_infer_prepends_role_prompt_from_source():
 
 
 def test_infer_explicit_system_overrides_source():
-    agent = _agent(_coder_source())
+    agent = _agent(_coder_role())
     sent = _script(agent, [_ok("ok")])
     asyncio.run(agent.infer("hi", system="be terse"))
     req = _last_request(sent)
@@ -151,7 +150,7 @@ def test_infer_passes_generation_params():
 # chat                                                                         #
 # --------------------------------------------------------------------------- #
 def test_chat_prepends_system_when_absent():
-    agent = _agent(_coder_source())
+    agent = _agent(_coder_role())
     sent = _script(agent, [_ok("reply")])
     asyncio.run(agent.chat([{"role": "user", "content": "hi"}]))
     req = _last_request(sent)
