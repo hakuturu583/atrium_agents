@@ -6,99 +6,76 @@ trusted host code (the `atrium` control plane and evolution machinery). They
 depend on `atrium` (a pinned dependency) for the shared runtime: `BaseAgent`, the
 A2A protocol, sandbox types and the agent factory.
 
-## The agents
+## The agent + its role
 
-| Agent | Base | Single responsibility |
-| --- | --- | --- |
-| `TabbyLLMAgent` | `InferenceAgent` | Run an LLM. WAN-isolated, GPU-only inference over A2A (tabbyAPI / exllamav3). Knows nothing about prompt assembly. |
-| `PromptBuilderAgent` | `BaseAgent` | Assemble role prompts. Model-free A2A service. Knows nothing about models. |
+There is one inference agent — `TabbyLLMAgent` (WAN-isolated, GPU-only inference
+over A2A, tabbyAPI / exllamav3) — and a **`Role`** that says what it is *for*:
 
-The two are joined by a thin seam — a
-[`PromptSource`](src/atrium_agents/prompt_source.py), injected into the inference
-agent — so neither depends on the other's internals.
+| Piece | Responsibility |
+| --- | --- |
+| `InferenceAgent` / `TabbyLLMAgent` | Run an LLM. Role-agnostic engine. |
+| `Role` (on the `InferenceAgent` layer) | A prompt **profile** + how the agent frames I/O (request → prompt, model text → reply). |
 
-## Prompts as a service: coder ⟂ reviewer
+`Role` lives on the `InferenceAgent` layer — not on any concrete backend — so a
+future backend (another `InferenceAgent` subclass over a different serving stack)
+reuses the exact same role machinery.
 
-The prompt an LLM receives is an *assembly of reusable, ordered sections*
-(identity, tone, tool guidance, rules, project memory, the current objective …).
-That assembly is the layered
-[`PromptMemory`](src/atrium_agents/prompt_memory.py) engine, and the concrete
-role prompts live as **profiles** in
-[`prompt_profiles.py`](src/atrium_agents/prompt_profiles.py) — deliberately
-**LLM-agnostic**: the same `coder` / `reviewer` profile composes the same prompt
-whichever backend runs behind it, so swapping the model never rewrites the role's
-instructions.
+## Coder ⟂ reviewer: one engine, two roles
 
-`PromptBuilderAgent` serves those profiles from **its own A2A endpoint**. It
-holds no model and needs no GPU — composing a prompt is pure, host-side string
-work. Making it a separate agent lets a **coder** and a **reviewer** run as two
-distinct A2A agents with **unshared contexts**, each drawing its role prompt from
-one common source:
+A coder and a reviewer are the **same** `TabbyLLMAgent` client, fanned into one
+GPU-resident model, differing only by the `Role` handed to them:
 
 ```text
-                     ┌──────────────────────┐
-                     │  PromptBuilderAgent   │  profiles: coder, reviewer
-                     └──────────┬───────────┘
-             build:coder │      │ build:reviewer   (A2A, via PromptSource)
-                    ┌─────▼──┐   └──▼────────┐
-                    │ coder  │      │reviewer│      separate contexts
-                    └───┬────┘      └───┬────┘
-                        └──── one shared tabby backend ────┘
+                 ┌──────────── one tabby backend (shared model) ───────────┐
+                 │                                                          │
+        role=coder_role()                                       role=reviewer_role()
+        ┌────────▼────────┐                                     ┌──────────▼─────────┐
+        │  coder client   │  code / tool-calls                  │  reviewer client   │  VERDICT
+        └─────────────────┘                                     └────────────────────┘
+                 └──────── concurrent requests → continuous batching ───────┘
 ```
 
-The reviewer evaluates a deliverable it **did not write**, with no window into
-the coder's reasoning or intermediate turns — an independent second opinion,
-which is the accuracy win the split is for.
+Because they are two clients of *one* backend, their concurrent inference
+requests ride tabbyAPI's **continuous batching** and share the KV cache — make
+them separate backends and that is lost. They keep **unshared contexts**, so the
+reviewer judges a deliverable it never authored, with no window into the coder's
+reasoning — the review-accuracy win.
 
-### The seam: `PromptSource`
+A **profile** is a layered [`PromptMemory`](src/atrium_agents/prompt_memory.py)
+(see [`prompt_profiles.py`](src/atrium_agents/prompt_profiles.py)) — deliberately
+**LLM-agnostic**, so swapping the model never rewrites a role. The role composes
+its profile **locally** (pure string assembly — no prompt service, no extra
+network hop); the profiles are still shared, backend-independent data.
 
-An inference agent has **no built-in role**. It is handed a `PromptSource` and
-asks it for the system prompt each turn — the source it receives *is* its role:
+### Roles
 
-* `RemotePromptSource(target, profile)` — fetch the prompt from a
-  `PromptBuilderAgent` over **A2A** (the default path).
-* `LocalPromptSource(builder, profile)` — call a co-located builder directly (no
-  network; handy for single-process wiring and tests).
+* `coder_role()` — the `coder` profile with passthrough framing. It also folds a
+  rework `review_feedback` payload into the prompt, so a coder re-dispatched by
+  the workboard review gate sees the reviewer's feedback.
+* `reviewer_role()` → `ReviewerRole` — reads a `review_request` (task +
+  deliverable) into a review prompt and parses the model's `VERDICT: approve /
+  request-changes` into a **workboard verdict**, which is what couples it to
+  `atrium.orchestration` (the review gate). Fail-closed: an ambiguous review is
+  never an approval.
 
 ### Wiring it up
 
 ```python
-from atrium_agents.prompt_builder_agent import PromptBuilderAgent
-from atrium_agents.prompt_source import RemotePromptSource
+from atrium_agents.role import coder_role, reviewer_role
 from atrium_agents.tabby_llm_agent.agent import TabbyLLMAgent
 
-# 1. A model-free prompt service (serves the built-in coder/reviewer profiles).
-builder = PromptBuilderAgent("prompt-builder")
-pb = builder.a2a_endpoint()
-
-# 2. Two inference clients fanned into ONE tabby backend. Their role is the
-#    injected source; they keep independent A2A contexts.
-coder = TabbyLLMAgent.connect(
-    "coder", bridge_url, prompt_source=RemotePromptSource(pb, "coder"),
-)
-reviewer = TabbyLLMAgent.connect(
-    "reviewer", bridge_url, prompt_source=RemotePromptSource(pb, "reviewer"),
-)
+# Two clients fanned into ONE backend, differing only by role.
+coder    = TabbyLLMAgent.connect("coder",    bridge_url, role=coder_role())
+reviewer = TabbyLLMAgent.connect("reviewer", bridge_url, role=reviewer_role())
 
 patch  = await coder.infer("Implement the feature described in TASK.md")
-review = await reviewer.infer(f"Review this patch against TASK.md:\n{patch}")
+review = await reviewer.infer(...)   # or dispatched by the workboard review gate
 ```
 
-An agent with no `prompt_source` is a role-agnostic backend: it sends no system
-prompt unless the caller passes one explicitly.
-
-### A2A contract
-
-`PromptBuilderAgent` speaks a two-verb contract over A2A (a structured data part):
-
-* **build** — `{"type": "build", "profile": name, "context": {...}, "tools": [...],
-  "include": [...], "exclude": [...]}` → a text reply with the composed system
-  prompt (`metadata.status == "ok"`).
-* **list_profiles** — `{"type": "list_profiles"}` → a data reply
-  `{"profiles": [...]}`.
-
-Profiles can also be defined in YAML and layered over (or replace) the built-ins
-via `PromptBuilderAgent.from_yaml(...)`.
+The reviewer is the endpoint the control-plane **review gate**
+(`atrium.orchestration.review`) dispatches each node's deliverable to; its verdict
+becomes the node's Prefect state. An agent with no role is a role-agnostic
+backend: it sends no system prompt unless the caller passes one.
 
 ## Development
 

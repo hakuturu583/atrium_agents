@@ -18,8 +18,7 @@ from __future__ import annotations
 
 from atrium.core.factory import register_agent_type
 
-from atrium_agents.inference_agent import InferenceAgent, InferenceSettings
-from atrium_agents.prompt_builder_agent import PromptBuilderAgent
+from atrium_agents.inference_agent import InferenceAgent, InferenceSettings, Role
 from atrium_agents.prompt_memory import (
     PromptLayer,
     PromptMemory,
@@ -31,16 +30,24 @@ from atrium_agents.prompt_profiles import (
     coder_profile,
     reviewer_profile,
 )
-from atrium_agents.prompt_source import (
-    LocalPromptSource,
-    PromptSource,
-    RemotePromptSource,
+from atrium_agents.role import (
+    ReviewerRole,
+    build_review_prompt,
+    coder_role,
+    parse_verdict,
+    reviewer_role,
 )
 from atrium_agents.tabby_llm_agent import TabbyAgentConfig, TabbyLLMAgent
 
 __all__ = [
     "InferenceAgent",
     "InferenceSettings",
+    "Role",
+    "ReviewerRole",
+    "coder_role",
+    "reviewer_role",
+    "parse_verdict",
+    "build_review_prompt",
     "PromptLayer",
     "PromptMemory",
     "default_prompt_memory",
@@ -48,15 +55,12 @@ __all__ = [
     "coder_profile",
     "reviewer_profile",
     "builtin_profiles",
-    "PromptBuilderAgent",
-    "PromptSource",
-    "RemotePromptSource",
-    "LocalPromptSource",
     "TabbyAgentConfig",
     "TabbyLLMAgent",
 ]
 
 # Register the evolvable concrete agents so they can be launched from a bare slug
 # (create_agent_by_slug) once the registry has an active generation for them.
+# A coder / reviewer is a TabbyLLMAgent + a role (not a distinct agent type), so
+# there is no separate reviewer slug to register.
 register_agent_type(TabbyLLMAgent)
-register_agent_type(PromptBuilderAgent)

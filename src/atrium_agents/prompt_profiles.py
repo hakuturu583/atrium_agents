@@ -7,13 +7,13 @@ composes the same prompt whether it is fed to tabbyAPI/exllamav3, an OpenAI-styl
 backend, or anything else, so swapping the underlying LLM never rewrites the
 role's instructions.
 
-Profiles are what the :class:`~atrium_agents.prompt_builder_agent.PromptBuilderAgent`
-serves over A2A. Splitting them out here (rather than burying them inside a
-concrete inference agent) is what lets a *coder* agent and a *reviewer* agent —
-each a separate A2A endpoint with its own, unshared context — draw their role
-prompts from one common, backend-independent source. The reviewer evaluating a
-deliverable it did not write, with no window into the author's reasoning, is the
-accuracy win this separation buys.
+Profiles are what a :class:`~atrium_agents.inference_agent.Role` carries and
+composes locally into its system prompt. Splitting them out here (rather than
+burying them inside a concrete inference agent) is what lets a *coder* and a
+*reviewer* — the same engine handed different roles, with their own unshared
+contexts — draw their role prompts from one common, backend-independent source.
+The reviewer evaluating a deliverable it did not write, with no window into the
+author's reasoning, is the accuracy win this separation buys.
 
 The canonical layer set and order come from
 :func:`~atrium_agents.prompt_memory.default_prompt_memory`: *stable* layers
@@ -164,7 +164,7 @@ def reviewer_profile() -> PromptMemory:
 
 
 def builtin_profiles() -> dict[str, PromptMemory]:
-    """The default profile registry served by :class:`PromptBuilderAgent`.
+    """The built-in role profiles, by name (``coder`` / ``reviewer``).
 
     Maps each name in :data:`BUILTIN_PROFILE_NAMES` to a freshly built
     :class:`PromptMemory` so callers own an independent, mutable copy.

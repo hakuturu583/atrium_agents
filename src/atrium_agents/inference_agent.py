@@ -20,16 +20,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
 
-from atrium_agents.prompt_source import PromptSource
+from atrium_agents.prompt_memory import PromptMemory
 from atrium.core.base_agent import BaseAgent
 from atrium.core.errors import PolicyViolationError
 from atrium.core.types import GPURequest, NetworkMode, SandboxConfig, VersionTag
 from atrium.protocol import (
     Message,
-    Role,
+    Role as A2ARole,
     get_message_data,
     get_message_text,
-    metadata_dict,
     text_message,
 )
 
@@ -37,7 +36,79 @@ __all__ = [
     "InferenceAgent",
     "InferenceSettings",
     "ChatMessage",
+    "Role",
 ]
+
+
+def _merged_data(message: Message) -> dict[str, Any]:
+    """Merge every structured data part of ``message`` into one mapping."""
+    merged: dict[str, Any] = {}
+    for part in get_message_data(message):
+        if isinstance(part, dict):
+            merged.update(part)
+    return merged
+
+
+@dataclass
+class Role:
+    """What an inference agent *is for* — its prompt profile + how it frames I/O.
+
+    A :class:`InferenceAgent` is a role-agnostic engine; a ``Role`` is the thin,
+    **backend-independent** thing that turns it into a *coder* or a *reviewer*. It
+    lives here (not on any concrete backend) precisely so a future backend — a
+    different ``InferenceAgent`` subclass over another serving stack — reuses the
+    exact same role machinery: same profiles, same request/reply framing.
+
+    It bundles the two aspects that actually differ between roles:
+
+    * :attr:`prompt` — the layered :class:`PromptMemory` (its profile) that it
+      composes into the system prompt; ``None`` sends no system prompt;
+    * :meth:`frame_prompt` / :meth:`frame_reply` — how an inbound A2A request
+      becomes the user prompt, and how the model's text becomes the reply.
+
+    The role is a *parameter*, not a subclass or a separate backend — so a coder
+    and a reviewer are the same client fanned into one model, and their concurrent
+    requests ride the backend's continuous batching. The prompt is composed
+    locally (pure string assembly — no service, no network); the profiles are
+    still shared, backend-independent data. The base is a passthrough assistant
+    (request text in → text out) that also folds a rework ``review_feedback``
+    payload into the prompt, so a doer re-dispatched by the workboard review gate
+    actually sees the feedback. Subclass to specialize framing (see
+    :class:`~atrium_agents.role.ReviewerRole`).
+    """
+
+    name: str = "default"
+    prompt: Optional[PromptMemory] = None
+
+    def system_prompt(
+        self,
+        *,
+        tools: Optional[list[dict[str, Any]]] = None,
+        context: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[str]:
+        """Compose this role's system prompt (``None`` when it has no profile)."""
+        if self.prompt is None:
+            return None
+        ctx: dict[str, Any] = dict(context or {})
+        ctx.setdefault("tools", tools or [])
+        return self.prompt.compose(ctx) or None
+
+    def frame_prompt(self, message: Message) -> str:
+        """Turn an inbound A2A request into the model's user prompt."""
+        text = get_message_text(message)
+        feedback = _merged_data(message).get("review_feedback")
+        if feedback:
+            return f"{text}\n\n## Reviewer feedback (address this before finishing)\n{feedback}"
+        return text
+
+    def frame_reply(self, text: str, message: Message) -> Message:
+        """Turn the model's text output into the A2A reply message."""
+        return text_message(
+            text,
+            role=A2ARole.ROLE_AGENT,
+            context_id=message.context_id or None,
+            task_id=message.task_id or None,
+        )
 
 # An OpenAI-style chat message: ``{"role": "user"|"assistant"|"system"|"tool", "content": str}``.
 ChatMessage = dict[str, Any]
@@ -205,17 +276,17 @@ class InferenceAgent(BaseAgent, abc.ABC):
         *,
         require_gpu: bool = True,
         settings: Optional[InferenceSettings] = None,
-        prompt_source: Optional[PromptSource] = None,
+        role: Optional[Role] = None,
     ) -> None:
         super().__init__(agent_id, version, sandbox_config or _secure_inference_defaults())
         self._require_gpu = require_gpu
         self.settings = settings or InferenceSettings()
-        # The agent's role is injected, not built in: ``prompt_source`` is what
-        # supplies its system prompt each turn (see :meth:`resolve_system_prompt`).
-        # The inference agent itself holds no prompt-assembly logic — a coder and
-        # a reviewer are the same engine handed different sources. ``None`` means
-        # this agent sends no system prompt unless the caller passes one.
-        self.prompt_source = prompt_source
+        # The agent's *role* (coder, reviewer, …) is injected, not built in: it
+        # supplies the system prompt (its profile) and frames the agent's I/O. A
+        # coder and a reviewer are the same engine handed different roles — which
+        # is what lets them fan into one shared backend and continuous-batch. The
+        # default role is a passthrough assistant with no system prompt.
+        self.role = role if role is not None else Role("default")
         self._enforce_isolation_policy()
 
     def _enforce_isolation_policy(self) -> None:
@@ -236,35 +307,18 @@ class InferenceAgent(BaseAgent, abc.ABC):
     # A2A glue (concrete) — turns an inbound message into an infer() call #
     # ------------------------------------------------------------------ #
     async def handle_task(self, message: Message) -> Message:
-        """Adapt an inbound A2A message to :meth:`infer` and wrap the reply."""
-        prompt = get_message_text(message)
-        params = self.resolve_generation_params(**self._params_from_message(message))
-        result = await self.infer(prompt, **params)
-        return text_message(
-            result,
-            role=Role.ROLE_AGENT,
-            context_id=message.context_id or None,
-            task_id=message.task_id or None,
-        )
+        """Adapt an inbound A2A request to :meth:`infer`, framed by the agent's role.
 
-    @staticmethod
-    def _params_from_message(message: Message) -> dict[str, Any]:
-        """Extract inference parameters carried alongside the prompt.
-
-        Parameters may ride in the message metadata (scalars) or in a structured
-        data part (e.g. ``tools``/``tool_choice``). Both are merged.
+        The role decides how the request becomes the user prompt
+        (:meth:`Role.frame_prompt`) and how the model's text becomes the reply
+        (:meth:`Role.frame_reply`) — so a coder returns text while a reviewer
+        returns a workboard verdict, from the same engine. Generation knobs come
+        from the agent's :class:`InferenceSettings`; the role's profile supplies
+        the system prompt inside :meth:`infer`.
         """
-        params: dict[str, Any] = {}
-        meta = metadata_dict(message)
-        for key in ("max_tokens", "temperature", "system", "tool_choice"):
-            if key in meta:
-                params[key] = meta[key]
-        for data in get_message_data(message):
-            if isinstance(data, dict):
-                params.update(
-                    {k: v for k, v in data.items() if k not in ("type", "status")}
-                )
-        return params
+        prompt = self.role.frame_prompt(message)
+        result = await self.infer(prompt)
+        return self.role.frame_reply(result, message)
 
     # ------------------------------------------------------------------ #
     # Generation parameters                                              #
@@ -296,7 +350,7 @@ class InferenceAgent(BaseAgent, abc.ABC):
         return self.settings
 
     # ------------------------------------------------------------------ #
-    # System prompt — delegated to the injected PromptSource             #
+    # System prompt — composed from the role's profile                   #
     # ------------------------------------------------------------------ #
     async def resolve_system_prompt(
         self,
@@ -307,17 +361,14 @@ class InferenceAgent(BaseAgent, abc.ABC):
     ) -> Optional[str]:
         """The system prompt to send for this call.
 
-        An explicit ``system`` always wins. Otherwise the agent asks its injected
-        :attr:`prompt_source` for the role prompt (e.g. a
-        :class:`~atrium_agents.prompt_source.RemotePromptSource` fetching it from
-        a ``PromptBuilderAgent`` over A2A). ``None`` — no source and no explicit
-        prompt — sends no system message. The agent composes nothing itself.
+        An explicit ``system`` always wins. Otherwise the agent's :attr:`role`
+        composes its profile locally (:meth:`Role.system_prompt`) — ``None`` when
+        the role has no profile, sending no system message. Async so a future
+        backend could source it remotely without changing callers.
         """
         if system is not None:
             return system
-        if self.prompt_source is None:
-            return None
-        return await self.prompt_source.system_prompt(tools=tools, context=context)
+        return self.role.system_prompt(tools=tools, context=context)
 
     # ------------------------------------------------------------------ #
     # Token accounting                                                   #
