@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
 
-from atrium_agents.prompt_memory import PromptLayer, PromptMemory
+from atrium_agents.prompt_source import PromptSource
 from atrium.core.base_agent import BaseAgent
 from atrium.core.errors import PolicyViolationError
 from atrium.core.types import GPURequest, NetworkMode, SandboxConfig, VersionTag
@@ -37,8 +37,6 @@ __all__ = [
     "InferenceAgent",
     "InferenceSettings",
     "ChatMessage",
-    "PromptLayer",
-    "PromptMemory",
 ]
 
 # An OpenAI-style chat message: ``{"role": "user"|"assistant"|"system"|"tool", "content": str}``.
@@ -207,15 +205,17 @@ class InferenceAgent(BaseAgent, abc.ABC):
         *,
         require_gpu: bool = True,
         settings: Optional[InferenceSettings] = None,
-        prompt_memory: Optional[PromptMemory] = None,
+        prompt_source: Optional[PromptSource] = None,
     ) -> None:
         super().__init__(agent_id, version, sandbox_config or _secure_inference_defaults())
         self._require_gpu = require_gpu
         self.settings = settings or InferenceSettings()
-        # Layered system-prompt registry. Empty by default (non-intrusive): an
-        # empty memory composes to nothing, so behavior is unchanged until a
-        # caller records layers (or supplies one, e.g. ``default_prompt_memory``).
-        self.prompt_memory = prompt_memory if prompt_memory is not None else PromptMemory()
+        # The agent's role is injected, not built in: ``prompt_source`` is what
+        # supplies its system prompt each turn (see :meth:`resolve_system_prompt`).
+        # The inference agent itself holds no prompt-assembly logic — a coder and
+        # a reviewer are the same engine handed different sources. ``None`` means
+        # this agent sends no system prompt unless the caller passes one.
+        self.prompt_source = prompt_source
         self._enforce_isolation_policy()
 
     def _enforce_isolation_policy(self) -> None:
@@ -296,32 +296,28 @@ class InferenceAgent(BaseAgent, abc.ABC):
         return self.settings
 
     # ------------------------------------------------------------------ #
-    # Layered system-prompt construction                                 #
+    # System prompt — delegated to the injected PromptSource             #
     # ------------------------------------------------------------------ #
-    def build_system_prompt(
+    async def resolve_system_prompt(
         self,
         system: Optional[str] = None,
         *,
         tools: Optional[list[dict[str, Any]]] = None,
         context: Optional[Mapping[str, Any]] = None,
     ) -> Optional[str]:
-        """Resolve the system prompt to send for this call.
+        """The system prompt to send for this call.
 
-        An explicit ``system`` argument always wins (callers keep full control).
-        Otherwise the agent's :attr:`prompt_memory` is composed: ``tools`` and any
-        ``context`` mapping are exposed to the layers (so the tool layer can
-        render ``ctx["tools"]``), and the synthesized string is returned — or
-        ``None`` when the memory is empty or composes to nothing, leaving the
-        request system-prompt-free exactly as before.
+        An explicit ``system`` always wins. Otherwise the agent asks its injected
+        :attr:`prompt_source` for the role prompt (e.g. a
+        :class:`~atrium_agents.prompt_source.RemotePromptSource` fetching it from
+        a ``PromptBuilderAgent`` over A2A). ``None`` — no source and no explicit
+        prompt — sends no system message. The agent composes nothing itself.
         """
         if system is not None:
             return system
-        if not self.prompt_memory.layers:
+        if self.prompt_source is None:
             return None
-        ctx: dict[str, Any] = dict(context or {})
-        ctx.setdefault("tools", tools or [])
-        composed = self.prompt_memory.compose(ctx)
-        return composed or None
+        return await self.prompt_source.system_prompt(tools=tools, context=context)
 
     # ------------------------------------------------------------------ #
     # Token accounting                                                   #

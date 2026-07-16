@@ -1,20 +1,20 @@
-"""Layered system-prompt construction for inference agents.
+"""Layered system-prompt construction.
 
-An inference agent's system prompt is rarely one monolithic string: it is an
-*assembly of reusable, ordered sections* — identity, tone/format rules, tool-use
-guidance, the tool definitions themselves, project memory, environment, the
-current objective, user overrides. This module lets an agent **record** those
-sections into a small registry as named *layers* and **compose** them into the
-final prompt, with the kept layers and their order configurable (incl. from YAML).
+A system prompt is rarely one monolithic string: it is an *assembly of reusable,
+ordered sections* — identity, tone/format rules, tool-use guidance, the tool
+definitions themselves, project memory, environment, the current objective, user
+overrides. This module lets a caller **record** those sections into a small
+registry as named *layers* and **compose** them into the final prompt, with the
+kept layers and their order configurable (incl. from YAML).
 
 Design lineage: ordered named sections that skip when empty (Hermes
 ``PromptManager``); a system prompt assembled from ordered section generators
 (Roo Code); labelled blocks recompiled into the prompt each turn (Letta/MemGPT).
 
-The composed string is returned verbatim and handed to
-:meth:`~atrium_agents.inference_agent.InferenceAgent.build_system_prompt`, which
-the inference agents pass as the ``system`` message — a pure host-side addition
-with no change to the A2A bridge or the wire format.
+This is the assembly engine behind
+:mod:`atrium_agents.prompt_profiles` and the
+:class:`~atrium_agents.prompt_builder_agent.PromptBuilderAgent` that serves the
+composed prompts over A2A.
 """
 
 from __future__ import annotations

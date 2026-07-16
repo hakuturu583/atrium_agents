@@ -24,7 +24,7 @@ from dataclasses import fields as dc_fields
 from typing import Any, Optional
 
 from atrium_agents.inference_agent import InferenceAgent, InferenceSettings
-from atrium_agents.prompt_memory import PromptLayer, PromptMemory, default_prompt_memory
+from atrium_agents.prompt_source import PromptSource
 from atrium_agents.tabby_llm_agent.cache import KVCacheConfig
 from atrium.core.errors import ModelNotReadyError, PolicyViolationError
 from atrium.core.types import SandboxConfig, VersionTag
@@ -56,7 +56,6 @@ __all__ = [
     "TabbyLLMAgent",
     "TabbyAgentConfig",
     "coding_agent_settings",
-    "coding_agent_prompt_memory",
 ]
 
 
@@ -89,66 +88,6 @@ def coding_agent_settings() -> InferenceSettings:
         compaction_summary_max_tokens=1024,
         compaction_summary_temperature=0.2,
     )
-
-
-def coding_agent_prompt_memory() -> PromptMemory:
-    """Default layered system prompt for the coding-agent preset.
-
-    Built on :func:`~atrium_agents.prompt_memory.default_prompt_memory`'s
-    canonical order, with the *stable* layers (identity / tone / tool_guidance /
-    rules) filled with coding-agent guidance and the *volatile* layers
-    (capabilities / memory / environment / objective / user_instructions) left
-    empty for the caller to populate per turn (empties are skipped on compose).
-    The ``tools`` layer renders provided tool schemas as a ``<tools>`` block.
-
-    This is to the system prompt what :func:`coding_agent_settings` is to the
-    generation knobs: the tuned default a bare ``TabbyLLMAgent`` boots with.
-    """
-    memory = default_prompt_memory()
-    memory.record(
-        PromptLayer(
-            "identity",
-            order=10,
-            content=(
-                "You are a focused coding agent working inside an isolated, "
-                "WAN-cut-off sandbox. Produce correct, minimal, well-targeted "
-                "changes."
-            ),
-        )
-    )
-    memory.record(
-        PromptLayer(
-            "tone",
-            order=20,
-            content=(
-                "Be concise and direct. Prefer concrete actions and code over "
-                "prose, and match the conventions of the surrounding codebase."
-            ),
-        )
-    )
-    memory.record(
-        PromptLayer(
-            "tool_guidance",
-            order=30,
-            content=(
-                "Prefer the provided tools over ad-hoc shell when a tool fits. "
-                "Call one tool at a time and wait for its result before the next. "
-                "Read a file before editing it."
-            ),
-        )
-    )
-    memory.record(
-        PromptLayer(
-            "rules",
-            order=60,
-            content=(
-                "Keep changes minimal and reversible; avoid unrelated edits. "
-                "Verify your work by running tests when possible. Stay within the "
-                "sandbox — never attempt network egress or data exfiltration."
-            ),
-        )
-    )
-    return memory
 
 
 @dataclass(slots=True)
@@ -194,7 +133,7 @@ class TabbyLLMAgent(InferenceAgent):
         config: Optional[TabbyAgentConfig] = None,
         sandbox_config: Optional[SandboxConfig] = None,
         settings: Optional[InferenceSettings] = None,
-        prompt_memory: Optional[PromptMemory] = None,
+        prompt_source: Optional[PromptSource] = None,
     ) -> None:
         # Lazy imports keep version/sandbox wiring inside the package directory,
         # so the agent's version and its image tag share one source of truth.
@@ -205,18 +144,18 @@ class TabbyLLMAgent(InferenceAgent):
         sandbox_config = sandbox_config or build_sandbox_config(str(version))
 
         self.config = config or TabbyAgentConfig()
-        # Default to coding-agent-tuned settings *and* the coding-agent layered
-        # system prompt for this machine/model; callers can pass their own
-        # ``settings=`` / ``prompt_memory=`` or load them from YAML (from_yaml).
-        # A client (see ``connect``) shares another agent's backend and never
-        # starts a sandbox, so it legitimately needs no GPU of its own.
+        # Default to coding-agent-tuned generation settings for this machine/model.
+        # The *role* is not built in: pass a ``prompt_source`` (e.g. a coder or
+        # reviewer source backed by a PromptBuilderAgent) to give this backend a
+        # system prompt. A client (see ``connect``) shares another agent's backend
+        # and never starts a sandbox, so it legitimately needs no GPU of its own.
         super().__init__(
             agent_id,
             version,
             sandbox_config,
             require_gpu=not self.config.bridge_url,
             settings=settings or coding_agent_settings(),
-            prompt_memory=prompt_memory or coding_agent_prompt_memory(),
+            prompt_source=prompt_source,
         )
         self._model_ready = False
 
@@ -228,14 +167,15 @@ class TabbyLLMAgent(InferenceAgent):
         version: "str | VersionTag | None" = None,
         *,
         sandbox_config: Optional[SandboxConfig] = None,
+        prompt_source: Optional[PromptSource] = None,
     ) -> "TabbyLLMAgent":
-        """Construct an agent from a YAML file with ``tabby:``, ``inference:`` and
-        ``prompt:`` sections. Inference keys override the coding-agent defaults;
-        any omitted key keeps its tuned default. A ``prompt:`` block fully defines
-        the layered system prompt (see
-        :class:`~atrium_agents.prompt_memory.PromptMemory`); when it is omitted the
-        coding-agent default (:func:`coding_agent_prompt_memory`) is kept. Any
-        section may be absent.
+        """Construct an agent from a YAML file with ``tabby:`` and ``inference:``
+        sections. Inference keys override the coding-agent defaults; any omitted
+        key keeps its tuned default; either section may be absent.
+
+        The *role prompt* is not configured here — it is an injected
+        ``prompt_source`` (a role served by a ``PromptBuilderAgent``), so this
+        file carries only connection and generation knobs.
 
         Example::
 
@@ -249,15 +189,13 @@ class TabbyLLMAgent(InferenceAgent):
             raise ValueError(f"{path}: top-level YAML must be a mapping")
         config = TabbyAgentConfig.from_mapping(doc.get("tabby"))
         settings = coding_agent_settings().merge(doc.get("inference"))
-        # Omitted ``prompt:`` -> None -> constructor keeps the coding-agent default.
-        prompt_memory = PromptMemory.from_mapping(doc["prompt"]) if "prompt" in doc else None
         return cls(
             agent_id,
             version,
             config=config,
             sandbox_config=sandbox_config,
             settings=settings,
-            prompt_memory=prompt_memory,
+            prompt_source=prompt_source,
         )
 
     @classmethod
@@ -269,7 +207,7 @@ class TabbyLLMAgent(InferenceAgent):
         model_name: Optional[str] = None,
         version: "str | VersionTag | None" = None,
         settings: Optional[InferenceSettings] = None,
-        prompt_memory: Optional[PromptMemory] = None,
+        prompt_source: Optional[PromptSource] = None,
     ) -> "TabbyLLMAgent":
         """Build a *client-mode* agent that shares an already-loaded backend.
 
@@ -282,8 +220,13 @@ class TabbyLLMAgent(InferenceAgent):
 
         Pass ``model_name`` when the backend has more than one model available so
         requests target the right one; otherwise the backend's loaded model is
-        used. ``settings`` / ``prompt_memory`` default to the coding-agent preset,
-        exactly as for a backend-owning agent.
+        used.
+
+        Inject ``prompt_source`` to give this client its role. Fanning two
+        clients into one backend — one with a
+        :class:`~atrium_agents.prompt_source.RemotePromptSource` for ``"coder"``,
+        one for ``"reviewer"`` — gives a coder and a reviewer that share the
+        model but keep unshared contexts and draw prompts from a common builder.
         """
         config = TabbyAgentConfig(bridge_url=bridge_url, model_name=model_name)
         return cls(
@@ -291,7 +234,7 @@ class TabbyLLMAgent(InferenceAgent):
             version,
             config=config,
             settings=settings,
-            prompt_memory=prompt_memory,
+            prompt_source=prompt_source,
         )
 
     @property
@@ -450,10 +393,11 @@ class TabbyLLMAgent(InferenceAgent):
         a JSON string of the ``tool_calls`` so the caller can execute them and
         continue via :meth:`chat`. Retries on ``not_ready`` (model quantizing).
 
-        When ``system`` is omitted, the agent's layered ``prompt_memory`` is
-        composed into the system message (a no-op when the memory is empty).
+        When ``system`` is omitted, the role prompt from the agent's injected
+        ``prompt_source`` is sent as the system message (none when there is no
+        source).
         """
-        system = self.build_system_prompt(system, tools=tools)
+        system = await self.resolve_system_prompt(system, tools=tools)
         request: dict[str, Any] = {
             "type": KIND_INFER,
             "messages": _to_messages(prompt, system),
@@ -492,12 +436,12 @@ class TabbyLLMAgent(InferenceAgent):
         Oversized histories are compacted (older turns summarized) before the
         request is sent, per the agent's :class:`InferenceSettings`.
 
-        When the history carries no ``system`` turn, the agent's layered
-        ``prompt_memory`` is composed and prepended as one (a no-op when the
-        memory is empty); an existing system turn is always left untouched.
+        When the history carries no ``system`` turn, the role prompt from the
+        agent's injected ``prompt_source`` is prepended as one (none when there
+        is no source); an existing system turn is always left untouched.
         """
         if not any(m.get("role") == "system" for m in messages):
-            system = self.build_system_prompt(None, tools=tools)
+            system = await self.resolve_system_prompt(None, tools=tools)
             if system:
                 messages = [{"role": "system", "content": system}, *messages]
         messages = await self.compact_messages(messages)
