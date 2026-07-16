@@ -183,7 +183,7 @@ wheels = [
 [[package]]
 name = "atrium"
 version = "0.1.0"
-source = { git = "https://github.com/hakuturu583/atrium.git?branch=main#cb836aa29c513ae7ad889f240c2d9d4a59b508e2" }
+source = { git = "https://github.com/hakuturu583/atrium.git?branch=main#90068049d33cc402a49d8c98e77670487255fb33" }
 dependencies = [
     { name = "a2a-sdk", extra = ["telemetry"] },
     { name = "cryptography" },
