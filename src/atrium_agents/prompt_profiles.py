@@ -29,12 +29,14 @@ from atrium_agents.prompt_memory import PromptLayer, PromptMemory, default_promp
 __all__ = [
     "coder_profile",
     "reviewer_profile",
+    "planner_profile",
+    "flow_reviewer_profile",
     "builtin_profiles",
     "BUILTIN_PROFILE_NAMES",
 ]
 
 #: The canonical role names shipped as built-in profiles (see :func:`builtin_profiles`).
-BUILTIN_PROFILE_NAMES = ("coder", "reviewer")
+BUILTIN_PROFILE_NAMES = ("coder", "reviewer", "planner", "flow_reviewer")
 
 
 def coder_profile() -> PromptMemory:
@@ -163,10 +165,156 @@ def reviewer_profile() -> PromptMemory:
     return memory
 
 
+def planner_profile() -> PromptMemory:
+    """The **planner** role prompt: turn a request into a runnable job.
+
+    A planner reads a human request (JSON) and emits **two artifacts that together
+    form a job**: a self-contained Prefect ``flow.py`` and a ``params`` JSON. The
+    ``flow.py`` is *not* the work — it is an agent-dispatch orchestration: each task
+    assigns a piece of work to a subagent (a role-bearing inference agent) via the
+    preinstalled trusted primitive ``atrium_dispatch(agent, instruction, payload)``,
+    and the DAG edges are the dependencies. The prompt fixes a strict fenced-block
+    output contract so the reply parses deterministically (mirroring the reviewer's
+    ``VERDICT:`` contract).
+    """
+    memory = default_prompt_memory()
+    memory.record(
+        PromptLayer(
+            "identity",
+            order=10,
+            content=(
+                "You are a planning specialist. Given a human request (JSON), you "
+                "produce a runnable job: a self-contained Prefect flow (`flow.py`) "
+                "plus a `params` JSON. The flow ORCHESTRATES work — it does not do "
+                "the work itself. Each task assigns a piece of work to a subagent "
+                "and waits on its result; the task graph is the plan."
+            ),
+        )
+    )
+    memory.record(
+        PromptLayer(
+            "tone",
+            order=20,
+            content=(
+                "Be precise and minimal. Prefer the smallest DAG that satisfies the "
+                "request. Assign each task to exactly one subagent from the roster "
+                "you are given; never invent an agent that is not listed."
+            ),
+        )
+    )
+    memory.record(
+        PromptLayer(
+            "rules",
+            order=60,
+            content=(
+                "Dispatch to subagents ONLY through the preinstalled primitive "
+                "`from atrium_dispatch import atrium_dispatch` — call "
+                "`atrium_dispatch(agent, instruction, payload)` which returns "
+                "`{status, text, data}`. Do not open sockets, import networking "
+                "libraries, or attempt any egress: the runner is WAN-isolated and "
+                "anything else is blocked. Use only the standard library, `prefect`, "
+                "and `atrium_dispatch`. The flow must be self-contained and run to "
+                "completion in-process (no Prefect server/worker). Read inputs from "
+                "`params.json` next to the flow."
+            ),
+        )
+    )
+    memory.record(
+        PromptLayer(
+            "output_format",
+            order=95,
+            title="## Output format",
+            content=(
+                "Emit EXACTLY two fenced code blocks and nothing that must be "
+                "parsed outside them:\n"
+                "1. a ```python block containing the entire `flow.py` — it MUST "
+                "define a single `@flow`-decorated entrypoint named `main` AND call "
+                "it at module level behind an "
+                "`if __name__ == \"__main__\": main()` guard, so `python flow.py` "
+                "actually runs it;\n"
+                "2. a ```json block containing the `params` object (use `{}` if "
+                "there are none).\n"
+                "Any prose belongs outside the blocks. If you cannot produce a "
+                "valid flow, emit no python block — do not emit a partial one."
+            ),
+        )
+    )
+    return memory
+
+
+def flow_reviewer_profile() -> PromptMemory:
+    """The **flow reviewer** role prompt: judge a generated flow *before* it runs.
+
+    A specialization of the reviewer for the plan path: the deliverable is a
+    generated Prefect ``flow.py`` (an agent-dispatch orchestration) that is about to
+    be executed in a WAN-isolated runner. The review is therefore pre-execution and
+    safety-first — it checks the flow only orchestrates (dispatches via
+    ``atrium_dispatch``, defines a single ``main``, attempts no egress), not just
+    that it is plausible code. Emits the same ``VERDICT:`` line the reviewer gate
+    parses, so it plugs into the workboard review path unchanged.
+    """
+    memory = default_prompt_memory()
+    memory.record(
+        PromptLayer(
+            "identity",
+            order=10,
+            content=(
+                "You are a safety reviewer for a generated Prefect flow that is "
+                "about to run in a WAN-isolated sandbox. You did NOT write it; judge "
+                "only the flow source in front of you. The flow should ORCHESTRATE "
+                "work (dispatch to subagents), not do risky work itself."
+            ),
+        )
+    )
+    memory.record(
+        PromptLayer(
+            "tone",
+            order=20,
+            content=(
+                "Be specific and decisive, and quote the offending line for every "
+                "issue. Favor rejecting anything unsafe or ambiguous over approving."
+            ),
+        )
+    )
+    memory.record(
+        PromptLayer(
+            "rules",
+            order=60,
+            content=(
+                "Reject the flow unless ALL hold: it defines a single `main` "
+                "entrypoint; it reaches other agents ONLY through "
+                "`atrium_dispatch(agent, instruction, payload)`; it opens no sockets "
+                "and imports no networking/egress libraries; it runs no shell, "
+                "subprocess, or filesystem writes outside the workspace; it has no "
+                "obvious unbounded loop or resource bomb. Approve a flow that only "
+                "orchestrates dispatch calls and processes their results."
+            ),
+        )
+    )
+    memory.record(
+        PromptLayer(
+            "verdict",
+            order=95,
+            title="## Verdict format",
+            content=(
+                "End with a verdict line — `VERDICT: approve` or "
+                "`VERDICT: request-changes` — followed by a bulleted list of "
+                "findings, each tagged [blocking] or [nit] with a line reference."
+            ),
+        )
+    )
+    return memory
+
+
 def builtin_profiles() -> dict[str, PromptMemory]:
-    """The built-in role profiles, by name (``coder`` / ``reviewer``).
+    """The built-in role profiles, by name (coder / reviewer / planner / flow_reviewer).
 
     Maps each name in :data:`BUILTIN_PROFILE_NAMES` to a freshly built
     :class:`PromptMemory` so callers own an independent, mutable copy.
     """
-    return {"coder": coder_profile(), "reviewer": reviewer_profile()}
+    return {
+        "coder": coder_profile(),
+        "reviewer": reviewer_profile(),
+        "planner": planner_profile(),
+        "flow_reviewer": flow_reviewer_profile(),
+    }

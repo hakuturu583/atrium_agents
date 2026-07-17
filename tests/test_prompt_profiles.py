@@ -10,6 +10,8 @@ from atrium_agents.prompt_profiles import (
     BUILTIN_PROFILE_NAMES,
     builtin_profiles,
     coder_profile,
+    flow_reviewer_profile,
+    planner_profile,
     reviewer_profile,
 )
 
@@ -21,7 +23,26 @@ SAMPLE_TOOL = {
 
 def test_builtin_profiles_cover_the_declared_names():
     profiles = builtin_profiles()
-    assert set(profiles) == set(BUILTIN_PROFILE_NAMES) == {"coder", "reviewer"}
+    assert set(profiles) == set(BUILTIN_PROFILE_NAMES) == {
+        "coder",
+        "reviewer",
+        "planner",
+        "flow_reviewer",
+    }
+
+
+def test_planner_profile_composes_identity_and_output_contract():
+    composed = planner_profile().compose({})
+    assert "planning specialist" in composed
+    assert "atrium_dispatch" in composed          # the dispatch primitive contract
+    assert "```python" in composed and "```json" in composed  # the fenced-block contract
+
+
+def test_flow_reviewer_profile_is_safety_first_and_states_verdict():
+    composed = flow_reviewer_profile().compose({})
+    assert "safety reviewer" in composed
+    assert "atrium_dispatch" in composed              # must only dispatch via the primitive
+    assert "VERDICT: approve" in composed             # plugs into the reviewer gate
 
 
 def test_builtin_profiles_are_independent_copies():

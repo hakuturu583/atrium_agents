@@ -30,16 +30,24 @@ from atrium_agents.prompt_memory import (
     default_prompt_memory,
     tools_layer,
 )
+from atrium_agents.plan_agent import PlanAgent
 from atrium_agents.prompt_profiles import (
     builtin_profiles,
     coder_profile,
+    flow_reviewer_profile,
+    planner_profile,
     reviewer_profile,
 )
 from atrium_agents.role import (
+    PlannerRole,
     ReviewerRole,
+    build_plan_prompt,
     build_review_prompt,
     coder_role,
+    flow_reviewer_role,
+    parse_plan_output,
     parse_verdict,
+    planner_role,
     reviewer_role,
 )
 from atrium_agents.tabby_llm_agent import TabbyAgentConfig, TabbyLLMAgent
@@ -52,16 +60,24 @@ __all__ = [
     "SlackInterfaceAgent",
     "Turn",
     "ReviewerRole",
+    "PlannerRole",
     "coder_role",
     "reviewer_role",
+    "planner_role",
+    "flow_reviewer_role",
     "parse_verdict",
+    "parse_plan_output",
     "build_review_prompt",
+    "build_plan_prompt",
+    "PlanAgent",
     "PromptLayer",
     "PromptMemory",
     "default_prompt_memory",
     "tools_layer",
     "coder_profile",
     "reviewer_profile",
+    "planner_profile",
+    "flow_reviewer_profile",
     "builtin_profiles",
     "TabbyAgentConfig",
     "TabbyLLMAgent",
@@ -73,3 +89,4 @@ __all__ = [
 # there is no separate reviewer slug to register.
 register_agent_type(TabbyLLMAgent)
 register_agent_type(SlackInterfaceAgent)
+register_agent_type(PlanAgent)
