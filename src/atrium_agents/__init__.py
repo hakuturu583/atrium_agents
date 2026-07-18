@@ -33,13 +33,20 @@ from atrium_agents.prompt_memory import (
 from atrium_agents.prompt_profiles import (
     builtin_profiles,
     coder_profile,
+    flow_reviewer_profile,
+    planner_profile,
     reviewer_profile,
 )
 from atrium_agents.role import (
+    PlannerRole,
     ReviewerRole,
+    build_plan_prompt,
     build_review_prompt,
     coder_role,
+    flow_reviewer_role,
+    parse_plan_output,
     parse_verdict,
+    planner_role,
     reviewer_role,
 )
 from atrium_agents.tabby_llm_agent import TabbyAgentConfig, TabbyLLMAgent
@@ -52,16 +59,23 @@ __all__ = [
     "SlackInterfaceAgent",
     "Turn",
     "ReviewerRole",
+    "PlannerRole",
     "coder_role",
     "reviewer_role",
+    "planner_role",
+    "flow_reviewer_role",
     "parse_verdict",
+    "parse_plan_output",
     "build_review_prompt",
+    "build_plan_prompt",
     "PromptLayer",
     "PromptMemory",
     "default_prompt_memory",
     "tools_layer",
     "coder_profile",
     "reviewer_profile",
+    "planner_profile",
+    "flow_reviewer_profile",
     "builtin_profiles",
     "TabbyAgentConfig",
     "TabbyLLMAgent",
@@ -69,7 +83,7 @@ __all__ = [
 
 # Register the evolvable concrete agents so they can be launched from a bare slug
 # (create_agent_by_slug) once the registry has an active generation for them.
-# A coder / reviewer is a TabbyLLMAgent + a role (not a distinct agent type), so
-# there is no separate reviewer slug to register.
+# A coder / reviewer / planner is a TabbyLLMAgent + a role (not a distinct agent
+# type), so there is no separate coder/reviewer/planner slug to register.
 register_agent_type(TabbyLLMAgent)
 register_agent_type(SlackInterfaceAgent)
