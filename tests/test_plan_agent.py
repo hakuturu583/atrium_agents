@@ -1,17 +1,19 @@
-"""Tests for the PlanAgent — the planner engine with a registrable slug.
+"""Tests for the planner as a *role* on the shared inference engine.
 
-GPU/model-free: one ``handle_task`` integration through a ``PlanAgent`` whose
-bridge call is scripted (no model, no network), asserting the reply is a
-well-formed ``plan_result`` and the model saw the planner system prompt.
-Mirrors the reviewer integration in ``test_role.py``.
+A planner is not a distinct agent — it is a ``TabbyLLMAgent`` handed
+``planner_role()`` (exactly as a coder/reviewer is its role). GPU/model-free: one
+``handle_task`` integration through a ``TabbyLLMAgent`` whose bridge call is
+scripted (no model, no network), asserting the reply is a well-formed
+``plan_result`` and the model saw the planner system prompt. Mirrors the reviewer
+integration in ``test_role.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from atrium_agents.plan_agent import PlanAgent
-from atrium_agents.tabby_llm_agent.agent import STATUS_OK
+from atrium_agents.role import planner_role
+from atrium_agents.tabby_llm_agent.agent import STATUS_OK, TabbyLLMAgent
 from atrium.agents.plan_agent_protocol import build_plan_request, parse_plan_result
 from atrium.protocol import text_message
 
@@ -29,13 +31,15 @@ _REPLY = (
 )
 
 
-def test_plan_agent_defaults_to_planner_role():
-    assert PlanAgent("plan-1", "0.1.0").role.name == "planner"
-    assert PlanAgent.slug_for() == "plan_agent"
+def test_planner_is_a_role_on_a_plain_engine():
+    # No PlanAgent subclass: a planner is the tabby engine carrying planner_role().
+    agent = TabbyLLMAgent("planner-1", "0.1.0", role=planner_role())
+    assert agent.role.name == "planner"
+    assert agent.slug_for() == "tabby_llm_agent"  # the engine's slug, not a planner slug
 
 
-def test_plan_agent_handle_task_end_to_end():
-    agent = PlanAgent("plan-1", "0.1.0")
+def test_planner_role_handle_task_end_to_end():
+    agent = TabbyLLMAgent("planner-1", "0.1.0", role=planner_role())
     captured: dict = {}
 
     async def fake_send(request):

@@ -30,7 +30,6 @@ from atrium_agents.prompt_memory import (
     default_prompt_memory,
     tools_layer,
 )
-from atrium_agents.plan_agent import PlanAgent
 from atrium_agents.prompt_profiles import (
     builtin_profiles,
     coder_profile,
@@ -69,7 +68,6 @@ __all__ = [
     "parse_plan_output",
     "build_review_prompt",
     "build_plan_prompt",
-    "PlanAgent",
     "PromptLayer",
     "PromptMemory",
     "default_prompt_memory",
@@ -85,8 +83,7 @@ __all__ = [
 
 # Register the evolvable concrete agents so they can be launched from a bare slug
 # (create_agent_by_slug) once the registry has an active generation for them.
-# A coder / reviewer is a TabbyLLMAgent + a role (not a distinct agent type), so
-# there is no separate reviewer slug to register.
+# A coder / reviewer / planner is a TabbyLLMAgent + a role (not a distinct agent
+# type), so there is no separate coder/reviewer/planner slug to register.
 register_agent_type(TabbyLLMAgent)
 register_agent_type(SlackInterfaceAgent)
-register_agent_type(PlanAgent)
