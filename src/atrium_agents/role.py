@@ -207,9 +207,8 @@ def parse_plan_output(text: str) -> "tuple[str, dict[str, Any], list[str]]":
                     params = loaded
             except (ValueError, TypeError):
                 params = {}
-    requirements = [str(r) for r in params.pop("requirements", []) if isinstance(r, str)] if isinstance(
-        params.get("requirements"), list
-    ) else []
+    reqs = params.pop("requirements", None)
+    requirements = [str(r) for r in reqs if isinstance(r, str)] if isinstance(reqs, list) else []
     return flow_source, params, requirements
 
 
